@@ -86,7 +86,7 @@ sequenceDiagram
 
 ## Quick start (run the full stack)
 
-1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) so the following files exist:
+1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) **or** the OOP pipeline (see [OOP Python pipeline](#oop-python-pipeline-uml)) so the following files exist:
    - `aiProject/outputs/model_artifacts/model.pkl`
    - `aiProject/outputs/model_artifacts/heatmap_predictions_test_agg.csv`
 
@@ -127,12 +127,131 @@ Steps follow [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TT
 17. **Model selection** — Compare LightGBM vs. XGBoost on validation and test metrics and record the winner.
 18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`model.pkl`**, and aggregate test predictions by lat/lon/time bins into **`heatmap_predictions_test_agg.csv`** for the API heatmap endpoint.
 
+## OOP Python pipeline (UML)
+
+The notebook is also available as an **object-oriented** package under [`aiProject/ttc_pipeline/`](aiProject/ttc_pipeline/): stage classes in [`eda_stages.py`](aiProject/ttc_pipeline/eda_stages.py), training in [`training_stages.py`](aiProject/ttc_pipeline/training_stages.py), and a façade [`TTCDelayPipeline`](aiProject/ttc_pipeline/orchestrator.py) in [`orchestrator.py`](aiProject/ttc_pipeline/orchestrator.py). Training dependencies match [`server/requirements.txt`](server/requirements.txt) / [`aiProject/requirements.txt`](aiProject/requirements.txt) (`lightgbm`, `xgboost`, etc.).
+
+**Run from the repository root** (install `aiProject` requirements first; use `--no-plots` in headless environments):
+
+```bash
+python -m aiProject.ttc_pipeline           # EDA + training (same end state as full notebook)
+python -m aiProject.ttc_pipeline eda       # only treated CSV
+python -m aiProject.ttc_pipeline training  # only models (expects treated CSV on disk)
+python -m aiProject.ttc_pipeline all --no-plots
+```
+
+### UML (classes and relationships)
+
+`TTCDelayPipeline` owns a `PipelineConfig` and delegates each notebook block to a small class; `ModelTrainingPipeline` is created only for the training phase so importing the package does not require `lightgbm` until you train.
+
+```mermaid
+classDiagram
+    direction TB
+    class PipelineConfig {
+        +Path repo_root
+        +Path unified_file
+        +Path processed_file
+        +Path artifacts_dir
+        +bool show_plots
+    }
+    class TTCDelayPipeline {
+        +run_eda_phase() DataFrame
+        +run_training_phase(df?)
+        +run_all()
+        +dataframe DataFrame?
+    }
+    class UnifiedDataLoader {
+        +load() DataFrame
+    }
+    class DatasetValidator {
+        +validate_columns(df)
+        +parse_and_filter_years(df) DataFrame
+    }
+    class BaselineExplorer {
+        +explore(df)
+    }
+    class MissingDelayRecoverabilityAudit {
+        +audit(df)
+    }
+    class MissingValueAnalyzer {
+        +report(df)
+    }
+    class MissingValueHandler {
+        +transform(df) DataFrame
+    }
+    class GeoMissingSummary {
+        +summarize(df) DataFrame
+    }
+    class FeatureEngineer {
+        +transform(df) DataFrame
+    }
+    class TargetVariableBuilder {
+        +add_categories(df) DataFrame
+        +plot_distributions(df)
+    }
+    class NormalizationTransformer {
+        +assess(df) DataFrame
+        +transform(df) DataFrame
+    }
+    class ImbalanceAnalyzer {
+        +print_tables(df)
+        +plot_imbalance(df)
+        +plot_imbalance_secondary(df)
+    }
+    class ProcessedSummaryReporter {
+        +summarize(df)
+    }
+    class ProcessedDatasetWriter {
+        +save(df) Path
+    }
+    class ProcessedEDAExplorer {
+        +correlation_processed(df)
+        +temporal_patterns(df)
+        +appendix_correlation_raw_numerics(df)
+    }
+    class ModelTrainingPipeline {
+        +run_full_training(df?)
+        +load_modeling_dataframe(df?)
+        +clean_target_and_time() DataFrame
+        +temporal_split_and_cap()
+        +build_preprocessor() ColumnTransformer
+        +train_lightgbm()
+        +train_xgboost()
+        +compare_and_select_best() str
+        +export_production_bundle()
+    }
+
+    TTCDelayPipeline *-- PipelineConfig
+    ModelTrainingPipeline *-- PipelineConfig
+    TTCDelayPipeline ..> UnifiedDataLoader : uses
+    TTCDelayPipeline ..> DatasetValidator : uses
+    TTCDelayPipeline ..> BaselineExplorer : uses
+    TTCDelayPipeline ..> MissingDelayRecoverabilityAudit : uses
+    TTCDelayPipeline ..> MissingValueAnalyzer : uses
+    TTCDelayPipeline ..> MissingValueHandler : uses
+    TTCDelayPipeline ..> GeoMissingSummary : uses
+    TTCDelayPipeline ..> FeatureEngineer : uses
+    TTCDelayPipeline ..> TargetVariableBuilder : uses
+    TTCDelayPipeline ..> NormalizationTransformer : uses
+    TTCDelayPipeline ..> ImbalanceAnalyzer : uses
+    TTCDelayPipeline ..> ProcessedSummaryReporter : uses
+    TTCDelayPipeline ..> ProcessedDatasetWriter : uses
+    TTCDelayPipeline ..> ProcessedEDAExplorer : uses
+    TTCDelayPipeline ..> ModelTrainingPipeline : creates when training
+```
+
 ## Project structure
 
 ```text
 centennialCollege_AICapstoneProject/
 ├── aiProject/
 │   ├── 01_EDA_TTC_Delay_Prediction.ipynb
+│   ├── ttc_pipeline/       # OOP port of the notebook (see README UML)
+│   │   ├── config.py
+│   │   ├── eda_stages.py
+│   │   ├── training_stages.py
+│   │   ├── orchestrator.py
+│   │   └── __main__.py
 │   ├── outputs/model_artifacts/
 │   │   ├── model.pkl
 │   │   └── heatmap_predictions_test_agg.csv
@@ -155,6 +274,7 @@ TTC historical delay data (2017–2025) for bus, streetcar, and subway.
 |--------|------|
 | Run the API | [`server/README.md`](server/README.md) |
 | Run the web app | [`client/README.md`](client/README.md) |
+| OOP ML pipeline | [`aiProject/ttc_pipeline/`](aiProject/ttc_pipeline/) |
 
 ## Team
 
