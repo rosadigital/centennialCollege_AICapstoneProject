@@ -39,4 +39,4 @@ class PipelineConfig:
 
     @property
     def artifacts_dir(self) -> Path:
-        return self.output_dir / "model_artifacts"
+        return self.repo_root / "server" / "model_artifacts"

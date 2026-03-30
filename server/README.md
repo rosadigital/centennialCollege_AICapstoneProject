@@ -5,7 +5,7 @@ FastAPI service: model inference, heatmap data, and metadata for the web client.
 ## Prerequisites
 
 - **Python** 3.10+ recommended  
-- **Model artifacts** (from the EDA notebook) under the repo’s `aiProject/outputs/model_artifacts/`:
+- **Model artifacts** (from the EDA notebook / OOP pipeline) under `server/model_artifacts/`:
   - `model.pkl`
   - `heatmap_predictions_test_agg.csv`
 
@@ -49,7 +49,7 @@ Optional overrides (see `server/.env.example`):
 
 | Variable | Purpose |
 |----------|---------|
-| `ARTIFACTS_DIR` | Folder containing artifacts (default: `<repo>/aiProject/outputs/model_artifacts`) |
+| `ARTIFACTS_DIR` | Folder containing artifacts (default: `<repo>/server/model_artifacts`) |
 | `MODEL_FILE` | Path to `model.pkl` |
 | `HEATMAP_FILE` | Path to `heatmap_predictions_test_agg.csv` |
 | `CORS_ORIGINS` | Comma-separated allowed browser origins (default includes `http://localhost:5173`) |
@@ -57,7 +57,7 @@ Optional overrides (see `server/.env.example`):
 Example when running only from `server/` with relative paths:
 
 ```bash
-export ARTIFACTS_DIR=../aiProject/outputs/model_artifacts
+export ARTIFACTS_DIR=./model_artifacts
 export CORS_ORIGINS=http://localhost:5173
 PYTHONPATH=. uvicorn app.main:app --reload --port 8000
 ```

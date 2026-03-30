@@ -16,7 +16,7 @@ Users select **vehicle type**, **month**, **day of week**, and **hour**; the app
 
 ## Architecture
 
-High-level view of how the **browser**, **React client**, **FastAPI**, and **artifacts** fit together (see [`client/`](client/) and [`server/`](server/) for implementation details).
+High-level view of how the **browser**, **React client**, **FastAPI**, and **artifacts** fit together using an MCP-style request/response representation (explicit message contracts and resource reads).
 
 ```mermaid
 flowchart TB
@@ -43,52 +43,82 @@ flowchart TB
         R3 --> MS
     end
 
-    subgraph Artifacts["aiProject/outputs/model_artifacts"]
+    subgraph Artifacts["server/model_artifacts"]
         PKL["model.pkl — preprocessor + regressor bundle"]
         CSV["heatmap_predictions_test_agg.csv — binned preds + KPIs"]
     end
 
     U --> CP
     U --> HM
-    APIc -->|"HTTP JSON"| R1
-    APIc -->|"HTTP JSON"| R2
-    HS --> CSV
-    MS --> PKL
+    APIc -->|"REQ metadata {}"| R1
+    R1 -->|"RES metadata {vehicle_types, months, days_of_week, hours}"| APIc
+    APIc -->|"REQ heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}"| R2
+    R2 -->|"RES heatmap {points[], kpis}"| APIc
+    HS -->|"RESOURCE READ heatmap_predictions_test_agg.csv"| CSV
+    MS -->|"RESOURCE LOAD model.pkl"| PKL
 ```
+
+### Architecture steps (MCP-style)
+
+1. **Client sends metadata request** — The frontend sends a structured request with no payload to `/metadata`. The API returns valid domains for vehicle, month, weekday, and hour.
+2. **Client sends heatmap request** — The frontend sends filter parameters as a typed request to `/heatmap`. The API returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
+3. **Server reads heatmap resource** — `HeatmapService` reads `server/model_artifacts/heatmap_predictions_test_agg.csv` as its backing resource. The filtered subset is transformed into the response contract used by the client.
+4. **Server loads model resource** — `ModelService` loads `server/model_artifacts/model.pkl` with its preprocessing bundle. The API can then produce inference responses compatible with `POST /predict`.
 
 ## Sequence diagram (typical UI session)
 
-How the SPA loads options and refreshes the map when filters change (`include_time_decay` is supported by the API; the current UI sends `false`).
+How the SPA loads options and refreshes the map when filters change, with explicit request/response messages and resource interactions (`include_time_decay` is supported by the API; the current UI sends `false`).
 
 ```mermaid
 sequenceDiagram
     actor User
     participant App as React App
     participant API as FastAPI
-    participant DF as Heatmap CSV in memory
+    participant HFile as server/model_artifacts/heatmap_predictions_test_agg.csv
+    participant MFile as server/model_artifacts/model.pkl
+    participant HSvc as HeatmapService
+    participant MSvc as ModelService
 
     User->>App: Open app
-    App->>API: GET /metadata
-    API->>DF: Load once + distinct vehicle/month/day/hour
-    DF-->>API: Column domains
-    API-->>App: JSON metadata
+    App->>API: REQ /metadata {}
+    API->>HSvc: metadata()
+    HSvc->>HFile: RESOURCE READ (cached)
+    HFile-->>HSvc: rows
+    HSvc-->>API: metadata domains
+    API-->>App: RES /metadata {vehicle_types, months, days_of_week, hours}
     App->>App: Initialize filter defaults
 
     User->>App: Adjust vehicle / month / day / hour
-    App->>API: GET /heatmap?vehicle_type&month&day_of_week&hour&include_time_decay
-    API->>DF: Filter rows for slice
-    DF-->>API: Matching bins + aggregates
-    API-->>App: points[] + kpis avg_delay p90
+    App->>API: REQ /heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}
+    API->>HSvc: query(filters)
+    HSvc->>HFile: RESOURCE FILTER bins
+    HFile-->>HSvc: matching rows
+    HSvc-->>API: points + KPI aggregates
+    API-->>App: RES /heatmap {points[], kpis}
     App->>User: Update MapLibre heatmap + KPI cards
 
-    Note over API: POST /predict is available for point-level scores but not used by the default map flow.
+    opt Point-level prediction
+        App->>API: REQ /predict {lat, lon, vehicle_type, month, day_of_week, hour}
+        API->>MSvc: predict_single(...)
+        MSvc->>MFile: RESOURCE LOAD (cached)
+        MFile-->>MSvc: model bundle
+        MSvc-->>API: predicted_delay_minutes
+        API-->>App: RES /predict {predicted_delay_minutes, model_name}
+    end
 ```
+
+### Sequence steps (MCP-style)
+
+1. **Metadata handshake** — The app sends `REQ /metadata {}` to bootstrap filter options. The API returns a normalized metadata payload used to initialize UI state.
+2. **Heatmap query cycle** — The app sends `REQ /heatmap` with selected filters each time the user changes controls. The API resolves the request through `HeatmapService` and returns `points[]` plus KPI fields.
+3. **Resource-backed filtering** — `HeatmapService` reads and filters the heatmap CSV resource (cached in memory after first load). The result is a deterministic server response for the exact requested slice.
+4. **Optional point prediction** — The app can send `REQ /predict` for a single coordinate and time context. `ModelService` loads `model.pkl` and returns one prediction plus model metadata.
 
 ## Quick start (run the full stack)
 
 1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) **or** the OOP pipeline (see [OOP Python pipeline](#oop-python-pipeline-uml)) so the following files exist:
-   - `aiProject/outputs/model_artifacts/model.pkl`
-   - `aiProject/outputs/model_artifacts/heatmap_predictions_test_agg.csv`
+   - `server/model_artifacts/model.pkl`
+   - `server/model_artifacts/heatmap_predictions_test_agg.csv`
 
 2. **Start the API** (terminal 1) — see [`server/README.md`](server/README.md) for details.
 
@@ -125,7 +155,7 @@ Steps follow [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TT
 15. **Train LightGBM** — Fit the gradient-boosting regressor inside the preprocessing pipeline.
 16. **Train XGBoost** — Fit an alternative booster for comparison on the same feature matrix.
 17. **Model selection** — Compare LightGBM vs. XGBoost on validation and test metrics and record the winner.
-18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`model.pkl`**, and aggregate test predictions by lat/lon/time bins into **`heatmap_predictions_test_agg.csv`** for the API heatmap endpoint.
+18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`server/model_artifacts/model.pkl`**, and aggregate test predictions by lat/lon/time bins into **`server/model_artifacts/heatmap_predictions_test_agg.csv`** for the API heatmap endpoint.
 
 ## OOP Python pipeline (UML)
 
@@ -240,6 +270,13 @@ classDiagram
     TTCDelayPipeline ..> ModelTrainingPipeline : creates when training
 ```
 
+### UML steps
+
+1. **Pipeline configuration** — `PipelineConfig` centralizes paths (`dataset`, treated CSV, `server/model_artifacts`) and runtime flags. Every stage receives consistent location and behavior settings.
+2. **EDA orchestration** — `TTCDelayPipeline` delegates each notebook phase to focused classes (`Loader`, `Validator`, `FeatureEngineer`, etc.). The output is a treated dataset that matches the training contract.
+3. **Training orchestration** — `TTCDelayPipeline` creates `ModelTrainingPipeline` only when training is requested. This keeps EDA-only runs decoupled from heavy model dependencies.
+4. **Artifact production** — `ModelTrainingPipeline` trains/compares models and exports `model.pkl` and heatmap aggregates to `server/model_artifacts`. The server can immediately consume those files without extra path remapping.
+
 ## Project structure
 
 ```text
@@ -252,11 +289,12 @@ centennialCollege_AICapstoneProject/
 │   │   ├── training_stages.py
 │   │   ├── orchestrator.py
 │   │   └── __main__.py
-│   ├── outputs/model_artifacts/
-│   │   ├── model.pkl
-│   │   └── heatmap_predictions_test_agg.csv
 │   └── requirements.txt
 ├── server/                 # FastAPI — see server/README.md
+│   ├── model_artifacts/
+│   │   ├── model.pkl
+│   │   └── heatmap_predictions_test_agg.csv
+│   └── app/
 ├── client/                 # React + Vite — see client/README.md
 ├── dataset/
 └── README.md               # this file
