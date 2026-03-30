@@ -16,7 +16,7 @@ Users select **vehicle type**, **month**, **day of week**, and **hour**; the app
 
 ## Architecture
 
-High-level view of how the **browser**, **React client**, **FastAPI**, and **artifacts** fit together using an MCP-style request/response representation (explicit message contracts and resource reads).
+High-level view of how the **browser**, **MCP client adapter**, **FastAPI adapter/runtime**, and **artifacts/resources** fit together in a hybrid REST+MCP representation.
 
 ```mermaid
 flowchart TB
@@ -27,15 +27,15 @@ flowchart TB
     subgraph Client["Client — Vite + React + MapLibre"]
         CP[ControlPanel — filters]
         HM[HeatmapMap — basemap + heat layer]
-        APIc[lib/api.ts — fetch metadata & heatmap]
+        APIc[mcpClient adapter]
         CP --> APIc
         HM --> APIc
     end
 
-    subgraph Server["Server — FastAPI"]
-        R1["GET /metadata — filter domains from heatmap CSV"]
-        R2["GET /heatmap — query bins + KPIs"]
-        R3["POST /predict — LightGBM on lat/lon + filters"]
+    subgraph Server["Server — FastAPI MCP adapter/runtime"]
+        R1["Tool: get_metadata"]
+        R2["Tool: get_heatmap"]
+        R3["Tool: predict"]
         HS[HeatmapService — pandas filter]
         MS[ModelService — joblib bundle from model.pkl]
         R1 --> HS
@@ -50,69 +50,69 @@ flowchart TB
 
     U --> CP
     U --> HM
-    APIc -->|"REQ metadata {}"| R1
-    R1 -->|"RES metadata {vehicle_types, months, days_of_week, hours}"| APIc
-    APIc -->|"REQ heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}"| R2
-    R2 -->|"RES heatmap {points[], kpis}"| APIc
-    HS -->|"RESOURCE READ heatmap_predictions_test_agg.csv"| CSV
-    MS -->|"RESOURCE LOAD model.pkl"| PKL
+    APIc -->|"Tool call get_metadata {}"| R1
+    R1 -->|"Tool result {vehicle_types, months, days_of_week, hours}"| APIc
+    APIc -->|"Tool call get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}"| R2
+    R2 -->|"Tool result {points[], kpis}"| APIc
+    HS -->|"Resource access: heatmap_predictions_test_agg.csv"| CSV
+    MS -->|"Model artifact load: model.pkl"| PKL
 ```
 
 ### Architecture steps (MCP-style)
 
-1. **Client sends metadata request** — The frontend sends a structured request with no payload to `/metadata`. The API returns valid domains for vehicle, month, weekday, and hour.
-2. **Client sends heatmap request** — The frontend sends filter parameters as a typed request to `/heatmap`. The API returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
+1. **Client calls metadata tool** — The frontend adapter sends `get_metadata` with an empty payload. The server returns the valid domains for vehicle, month, weekday, and hour.
+2. **Client calls heatmap tool** — The frontend adapter sends `get_heatmap` with typed filters. The server returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
 3. **Server reads heatmap resource** — `HeatmapService` reads `server/model_artifacts/heatmap_predictions_test_agg.csv` as its backing resource. The filtered subset is transformed into the response contract used by the client.
-4. **Server loads model resource** — `ModelService` loads `server/model_artifacts/model.pkl` with its preprocessing bundle. The API can then produce inference responses compatible with `POST /predict`.
+4. **Server loads model artifact** — `ModelService` loads `server/model_artifacts/model.pkl` with its preprocessing bundle. The runtime can then produce inference results via the `predict` tool.
 
 ## Sequence diagram (typical UI session)
 
-How the SPA loads options and refreshes the map when filters change, with explicit request/response messages and resource interactions (`include_time_decay` is supported by the API; the current UI sends `false`).
+How the SPA loads options and refreshes the map when filters change, with explicit tool invocations/results and resource interactions (`include_time_decay` is supported by the API; the current UI sends `false`).
 
 ```mermaid
 sequenceDiagram
     actor User
     participant App as React App
-    participant API as FastAPI
+    participant API as FastAPI MCP adapter
     participant HFile as server/model_artifacts/heatmap_predictions_test_agg.csv
     participant MFile as server/model_artifacts/model.pkl
     participant HSvc as HeatmapService
     participant MSvc as ModelService
 
     User->>App: Open app
-    App->>API: REQ /metadata {}
+    App->>API: TOOL CALL get_metadata {}
     API->>HSvc: metadata()
     HSvc->>HFile: RESOURCE READ (cached)
     HFile-->>HSvc: rows
     HSvc-->>API: metadata domains
-    API-->>App: RES /metadata {vehicle_types, months, days_of_week, hours}
+    API-->>App: TOOL RESULT {vehicle_types, months, days_of_week, hours}
     App->>App: Initialize filter defaults
 
     User->>App: Adjust vehicle / month / day / hour
-    App->>API: REQ /heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}
+    App->>API: TOOL CALL get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}
     API->>HSvc: query(filters)
     HSvc->>HFile: RESOURCE FILTER bins
     HFile-->>HSvc: matching rows
     HSvc-->>API: points + KPI aggregates
-    API-->>App: RES /heatmap {points[], kpis}
+    API-->>App: TOOL RESULT {points[], kpis}
     App->>User: Update MapLibre heatmap + KPI cards
 
     opt Point-level prediction
-        App->>API: REQ /predict {lat, lon, vehicle_type, month, day_of_week, hour}
+        App->>API: TOOL CALL predict {lat, lon, vehicle_type, month, day_of_week, hour}
         API->>MSvc: predict_single(...)
         MSvc->>MFile: RESOURCE LOAD (cached)
         MFile-->>MSvc: model bundle
         MSvc-->>API: predicted_delay_minutes
-        API-->>App: RES /predict {predicted_delay_minutes, model_name}
+        API-->>App: TOOL RESULT {predicted_delay_minutes, model_name}
     end
 ```
 
 ### Sequence steps (MCP-style)
 
-1. **Metadata handshake** — The app sends `REQ /metadata {}` to bootstrap filter options. The API returns a normalized metadata payload used to initialize UI state.
-2. **Heatmap query cycle** — The app sends `REQ /heatmap` with selected filters each time the user changes controls. The API resolves the request through `HeatmapService` and returns `points[]` plus KPI fields.
+1. **Metadata handshake** — The app calls `get_metadata {}` to bootstrap filter options. The runtime returns a normalized metadata payload used to initialize UI state.
+2. **Heatmap query cycle** — The app calls `get_heatmap` with selected filters each time the user changes controls. The runtime resolves the call through `HeatmapService` and returns `points[]` plus KPI fields.
 3. **Resource-backed filtering** — `HeatmapService` reads and filters the heatmap CSV resource (cached in memory after first load). The result is a deterministic server response for the exact requested slice.
-4. **Optional point prediction** — The app can send `REQ /predict` for a single coordinate and time context. `ModelService` loads `model.pkl` and returns one prediction plus model metadata.
+4. **Optional point prediction** — The app can call `predict` for a single coordinate and time context. `ModelService` loads `model.pkl` and returns one prediction plus model metadata.
 
 ## Quick start (run the full stack)
 
