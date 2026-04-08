@@ -5,19 +5,19 @@ FastAPI service: model inference, heatmap data, and metadata for the web client.
 ## Prerequisites
 
 - **Python** 3.10+ recommended  
-- **Model artifacts** (from the EDA notebook / OOP pipeline) under `server/model_artifacts/`:
+- **Model artifacts** (from the EDA notebook / OOP pipeline). By default the API looks for `model.pkl` in **`server/model_artifacts/`** first; if it is not there but exists under **`aiProject/outputs/model_artifacts/`**, that folder is used automatically (no copy, no `ARTIFACTS_DIR`, unless you want to override).
   - `model.pkl`
-  - `heatmap_inference_config.json` (bin grid + filter domains for the heatmap API)
+  - `heatmap_inference_config.json` (bin grid + filter domains for the heatmap API; generated on training — optional if legacy CSV exists)
   - Optional: `heatmap_predictions_test_agg.csv` — used only if the JSON is missing, to **migrate** bin coordinates/metadata; heatmap **values** are always computed from `model.pkl` at request time.
 
-Paths are resolved from the **repository root** by default (see `app/config.py`).
+Paths are resolved from the **repository root** (see `app/config.py`). Override with **`ARTIFACTS_DIR`** if your files live elsewhere.
 
 ## Install
 
 Use a **virtual environment** at the repo root (recommended so `lightgbm` and other deps match what loads `model.pkl`):
 
 ```bash
-cd /path/to/centennialCollege_AICapstoneProject
+cd your-clone/centennialCollege_AICapstoneProject   # use the real path to this repo (not literally /path/to/...)
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r server/requirements.txt
@@ -28,15 +28,16 @@ pip install -r server/requirements.txt
 The Python package is **`app`** inside the **`server/`** folder. You must put **`server` on `PYTHONPATH`** (or run from inside `server/` with `PYTHONPATH=.`).  
 **Do not** use `PYTHONPATH=.` from the **repository root** — that breaks imports (`No module named 'app'`).
 
-**Recommended — from the repository root:**
+**Recommended — from the repository root** (after `cd` into the repo folder):
 
 ```bash
-cd /path/to/centennialCollege_AICapstoneProject
 source .venv/bin/activate
 PYTHONPATH=server uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Artifacts only under `aiProject/outputs/model_artifacts/` (not copied into `server/model_artifacts/`):**
+If `model.pkl` exists under `aiProject/outputs/model_artifacts/` but not under `server/model_artifacts/`, the server **auto-detects** that folder — you do not need `export ARTIFACTS_DIR=...` unless you want to force a path.
+
+**Force a specific artifacts folder** (optional):
 
 ```bash
 export ARTIFACTS_DIR="$(pwd)/aiProject/outputs/model_artifacts"
@@ -81,7 +82,7 @@ Or copy `server/.env.example` to `server/.env` and load it with your process man
 ## Troubleshooting
 
 - **`ModuleNotFoundError: No module named 'app'`** — You ran `uvicorn` with the wrong `PYTHONPATH`. From the **repo root**, use `PYTHONPATH=server` (not `PYTHONPATH=.`). Or `cd server` and use `PYTHONPATH=.`.
-- **`FileNotFoundError: Model file not found: .../server/model_artifacts/model.pkl`** — Either copy your training outputs into `server/model_artifacts/`, or set **`ARTIFACTS_DIR`** before starting (see example above) so it points at the folder that contains `model.pkl` (and ideally `heatmap_inference_config.json`, or the legacy CSV for bin migration).
+- **`FileNotFoundError: Model file not found: .../model.pkl`** — Ensure `model.pkl` exists in **`server/model_artifacts/`** or **`aiProject/outputs/model_artifacts/`** (the latter is auto-used if the former has no model). Otherwise set **`ARTIFACTS_DIR`** to the folder that contains `model.pkl`. Do not paste the literal path `/path/to/centennialCollege_AICapstoneProject` from docs — use your real project directory.
 - **`ModuleNotFoundError: No module named 'lightgbm'`** — Install dependencies with `pip install -r server/requirements.txt` inside the **same** virtualenv you use to run `uvicorn`.
 - **Wrong working directory** — If artifact paths fail, run from repo root or set `ARTIFACTS_DIR` / `MODEL_FILE` / `HEATMAP_FILE` / `HEATMAP_INFERENCE_CONFIG` explicitly.
 
