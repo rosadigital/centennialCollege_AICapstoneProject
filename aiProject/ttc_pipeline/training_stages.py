@@ -336,6 +336,20 @@ class ModelTrainingPipeline:
             )
         )
         heatmap_agg.to_csv(art / "heatmap_predictions_test_agg.csv", index=False)
+        gcfg = heatmap_df.dropna(subset=["Latitude", "Longitude"])
+        meta_out = {
+            "vehicle_types": sorted(gcfg["Vehicle_Type"].dropna().unique().tolist()),
+            "months": sorted(gcfg["Month"].dropna().astype(int).unique().tolist()),
+            "days_of_week": sorted(gcfg["DayOfWeek"].dropna().astype(int).unique().tolist()),
+            "hours": sorted(gcfg["Hour"].dropna().astype(int).unique().tolist()),
+        }
+        bins_unique = gcfg[["Latitude_Bin", "Longitude_Bin"]].drop_duplicates()
+        bins_out = [
+            {"latitude_bin": float(r["Latitude_Bin"]), "longitude_bin": float(r["Longitude_Bin"])}
+            for _, r in bins_unique.iterrows()
+        ]
+        with open(art / "heatmap_inference_config.json", "w", encoding="utf-8") as f:
+            json.dump({"metadata": meta_out, "bins": bins_out}, f, indent=2)
         print(f"Artifacts written to {art}")
         for p in sorted(art.glob("*")):
             print(f" - {p.name}")

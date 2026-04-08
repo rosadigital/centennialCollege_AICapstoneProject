@@ -12,7 +12,7 @@ This repository contains a complete TTC delay prediction workflow:
 - **API:** FastAPI backend in [`server/`](server/)
 - **UI:** React + Tailwind + MapLibre heatmap client in [`client/`](client/)
 
-Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs (loaded from pre-aggregated predictions; the API can also score single points via `POST /predict`).
+Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs computed **on each request** by the backend model (`model.pkl`) over a fixed geographic bin grid from `heatmap_inference_config.json` (training export). Point-level scoring remains available via `POST /predict`.
 
 ## Architecture
 
@@ -36,16 +36,17 @@ flowchart TB
         R1["Tool: get_metadata"]
         R2["Tool: get_heatmap"]
         R3["Tool: predict"]
-        HS[HeatmapService — pandas filter]
-        MS[ModelService — joblib bundle from model.pkl]
+        HS[HeatmapService — bin grid + orchestration]
+        MS[ModelService — batch inference from model.pkl]
         R1 --> HS
         R2 --> HS
+        HS --> MS
         R3 --> MS
     end
 
     subgraph Artifacts["server/model_artifacts"]
+        CFG["heatmap_inference_config.json — bins + filter domains"]
         PKL["model.pkl — preprocessor + regressor bundle"]
-        CSV["heatmap_predictions_test_agg.csv — binned preds + KPIs"]
     end
 
     U --> CP
@@ -54,16 +55,16 @@ flowchart TB
     R1 -->|"Tool result {vehicle_types, months, days_of_week, hours}"| APIc
     APIc -->|"Tool call get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}"| R2
     R2 -->|"Tool result {points[], kpis}"| APIc
-    HS -->|"Resource access: heatmap_predictions_test_agg.csv"| CSV
-    MS -->|"Model artifact load: model.pkl"| PKL
+    HS -.->|"startup: load grid + domains"| CFG
+    MS -->|"load once + infer"| PKL
 ```
 
 ### Architecture steps (MCP-style)
 
-1. **Client calls metadata tool** — The frontend adapter sends `get_metadata` with an empty payload. The server returns the valid domains for vehicle, month, weekday, and hour.
-2. **Client calls heatmap tool** — The frontend adapter sends `get_heatmap` with typed filters. The server returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
-3. **Server reads heatmap resource** — `HeatmapService` reads `server/model_artifacts/heatmap_predictions_test_agg.csv` as its backing resource. The filtered subset is transformed into the response contract used by the client.
-4. **Server loads model artifact** — `ModelService` loads `server/model_artifacts/model.pkl` with its preprocessing bundle. The runtime can then produce inference results via the `predict` tool.
+1. **Client calls metadata tool** — The frontend adapter sends `get_metadata` with an empty payload. The server returns valid domains for vehicle, month, weekday, and hour (loaded at startup from `heatmap_inference_config.json`, or derived once from the legacy aggregate CSV if that JSON is absent).
+2. **Client calls heatmap tool** — The frontend adapter sends `get_heatmap` with typed filters. The server runs **batch inference** over all geographic bins for that time context and returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
+3. **Bin grid resource** — `HeatmapService` holds the list of `(latitude_bin, longitude_bin)` coordinates from `heatmap_inference_config.json` (training export). **No precomputed delay values** are read from CSV for the response; delays are always produced by the model.
+4. **Model artifact** — `ModelService` loads `model.pkl` (preprocessor + regressor) once at startup and reuses it for every heatmap and `predict` call.
 
 ## Sequence diagram (typical UI session)
 
@@ -74,16 +75,15 @@ sequenceDiagram
     actor User
     participant App as React App
     participant API as FastAPI MCP adapter
-    participant HFile as server/model_artifacts/heatmap_predictions_test_agg.csv
-    participant MFile as server/model_artifacts/model.pkl
+    participant CFG as heatmap_inference_config.json
+    participant MFile as model.pkl
     participant HSvc as HeatmapService
     participant MSvc as ModelService
 
     User->>App: Open app
     App->>API: TOOL CALL get_metadata {}
     API->>HSvc: metadata()
-    HSvc->>HFile: RESOURCE READ (cached)
-    HFile-->>HSvc: rows
+    Note over HSvc: Domains + bin grid loaded at startup from CFG (or legacy CSV for migration)
     HSvc-->>API: metadata domains
     API-->>App: TOOL RESULT {vehicle_types, months, days_of_week, hours}
     App->>App: Initialize filter defaults
@@ -91,8 +91,10 @@ sequenceDiagram
     User->>App: Adjust vehicle / month / day / hour
     App->>API: TOOL CALL get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}
     API->>HSvc: query(filters)
-    HSvc->>HFile: RESOURCE FILTER bins
-    HFile-->>HSvc: matching rows
+    HSvc->>MSvc: predict_batch(all bins × filters)
+    MSvc->>MFile: in-memory model + preprocessor
+    MFile-->>MSvc: vector predictions
+    MSvc-->>HSvc: delay per bin
     HSvc-->>API: points + KPI aggregates
     API-->>App: TOOL RESULT {points[], kpis}
     App->>User: Update MapLibre heatmap + KPI cards
@@ -100,8 +102,7 @@ sequenceDiagram
     opt Point-level prediction
         App->>API: TOOL CALL predict {lat, lon, vehicle_type, month, day_of_week, hour}
         API->>MSvc: predict_single(...)
-        MSvc->>MFile: RESOURCE LOAD (cached)
-        MFile-->>MSvc: model bundle
+        MSvc->>MFile: same loaded bundle
         MSvc-->>API: predicted_delay_minutes
         API-->>App: TOOL RESULT {predicted_delay_minutes, model_name}
     end
@@ -109,16 +110,21 @@ sequenceDiagram
 
 ### Sequence steps (MCP-style)
 
-1. **Metadata handshake** — The app calls `get_metadata {}` to bootstrap filter options. The runtime returns a normalized metadata payload used to initialize UI state.
-2. **Heatmap query cycle** — The app calls `get_heatmap` with selected filters each time the user changes controls. The runtime resolves the call through `HeatmapService` and returns `points[]` plus KPI fields.
-3. **Resource-backed filtering** — `HeatmapService` reads and filters the heatmap CSV resource (cached in memory after first load). The result is a deterministic server response for the exact requested slice.
-4. **Optional point prediction** — The app can call `predict` for a single coordinate and time context. `ModelService` loads `model.pkl` and returns one prediction plus model metadata.
+1. **Metadata handshake** — The app calls `get_metadata {}` to bootstrap filter options. The runtime returns domains that were loaded with the bin grid at service startup (from `heatmap_inference_config.json`, or from the legacy aggregate CSV if the JSON is not present yet).
+2. **Heatmap query cycle** — The app calls `get_heatmap` with selected filters each time the user changes controls. `HeatmapService` invokes **batch prediction** over the full bin grid for that filter tuple via `ModelService`.
+3. **Model-backed map** — Predictions are computed from `model.pkl` for every `(lat_bin, lon_bin)` in the grid; weights and KPIs are derived from those scores (not from precomputed CSV columns).
+4. **Optional point prediction** — The app can call `predict` for a single coordinate and time context using the same loaded model bundle.
+
+### Heatmap request latency (reference)
+
+Measured locally with the project `.venv`, `ARTIFACTS_DIR` pointing at existing artifacts, and **~2066** bin points: one heatmap query took **~22–27 ms** after model load; first-time `model.pkl` load was **~1.5 s** (I/O + unpickle). Your numbers will vary with CPU, disk, and grid size.
 
 ## Quick start (run the full stack)
 
-1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) **or** the OOP pipeline (see [OOP Python pipeline](#oop-python-pipeline-uml)) so the following files exist:
-   - `server/model_artifacts/model.pkl`
-   - `server/model_artifacts/heatmap_predictions_test_agg.csv`
+1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) **or** the OOP pipeline (see [OOP Python pipeline](#oop-python-pipeline-uml)) so the following exist under `server/model_artifacts/` (or set `ARTIFACTS_DIR`):
+   - `model.pkl`
+   - `heatmap_inference_config.json` (bin grid + filter domains; written by the training export step)
+   - Optional legacy file `heatmap_predictions_test_agg.csv` — used only to **derive** bins/metadata if `heatmap_inference_config.json` is missing; heatmap **values** always come from the model at request time.
 
 2. **Start the API** (terminal 1) — see [`server/README.md`](server/README.md) for details.
 
@@ -155,7 +161,7 @@ Steps follow [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TT
 15. **Train LightGBM** — Fit the gradient-boosting regressor inside the preprocessing pipeline.
 16. **Train XGBoost** — Fit an alternative booster for comparison on the same feature matrix.
 17. **Model selection** — Compare LightGBM vs. XGBoost on validation and test metrics and record the winner.
-18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`server/model_artifacts/model.pkl`**, and aggregate test predictions by lat/lon/time bins into **`server/model_artifacts/heatmap_predictions_test_agg.csv`** for the API heatmap endpoint.
+18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`server/model_artifacts/model.pkl`**, write **`heatmap_inference_config.json`** (unique bins + filter domains), and optionally keep **`heatmap_predictions_test_agg.csv`** as an offline aggregate (the live API heatmap uses the model, not CSV values).
 
 ## OOP Python pipeline (UML)
 
@@ -293,6 +299,7 @@ centennialCollege_AICapstoneProject/
 ├── server/                 # FastAPI — see server/README.md
 │   ├── model_artifacts/
 │   │   ├── model.pkl
+│   │   ├── heatmap_inference_config.json
 │   │   └── heatmap_predictions_test_agg.csv
 │   └── app/
 ├── client/                 # React + Vite — see client/README.md

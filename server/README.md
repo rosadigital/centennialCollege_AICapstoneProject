@@ -7,7 +7,8 @@ FastAPI service: model inference, heatmap data, and metadata for the web client.
 - **Python** 3.10+ recommended  
 - **Model artifacts** (from the EDA notebook / OOP pipeline) under `server/model_artifacts/`:
   - `model.pkl`
-  - `heatmap_predictions_test_agg.csv`
+  - `heatmap_inference_config.json` (bin grid + filter domains for the heatmap API)
+  - Optional: `heatmap_predictions_test_agg.csv` — used only if the JSON is missing, to **migrate** bin coordinates/metadata; heatmap **values** are always computed from `model.pkl` at request time.
 
 Paths are resolved from the **repository root** by default (see `app/config.py`).
 
@@ -51,7 +52,8 @@ Optional overrides (see `server/.env.example`):
 |----------|---------|
 | `ARTIFACTS_DIR` | Folder containing artifacts (default: `<repo>/server/model_artifacts`) |
 | `MODEL_FILE` | Path to `model.pkl` |
-| `HEATMAP_FILE` | Path to `heatmap_predictions_test_agg.csv` |
+| `HEATMAP_FILE` | Path to legacy `heatmap_predictions_test_agg.csv` (optional migration source) |
+| `HEATMAP_INFERENCE_CONFIG` | Path to `heatmap_inference_config.json` (preferred) |
 | `CORS_ORIGINS` | Comma-separated allowed browser origins (default includes `http://localhost:5173`) |
 
 Example when running only from `server/` with relative paths:

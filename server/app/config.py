@@ -10,6 +10,13 @@ MODEL_FILE = Path(os.getenv("MODEL_FILE", str(ARTIFACTS_DIR / "model.pkl")))
 HEATMAP_FILE = Path(
     os.getenv("HEATMAP_FILE", str(ARTIFACTS_DIR / "heatmap_predictions_test_agg.csv"))
 )
+# Bins + filter domains for model-based heatmap (preferred over legacy CSV lookup).
+HEATMAP_INFERENCE_CONFIG = Path(
+    os.getenv(
+        "HEATMAP_INFERENCE_CONFIG",
+        str(ARTIFACTS_DIR / "heatmap_inference_config.json"),
+    )
+)
 
 CORS_ORIGINS = [
     origin.strip()

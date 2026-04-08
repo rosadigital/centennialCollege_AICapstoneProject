@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import CORS_ORIGINS, HEATMAP_FILE, MODEL_FILE
+from app.config import CORS_ORIGINS, HEATMAP_FILE, HEATMAP_INFERENCE_CONFIG, MODEL_FILE
 from app.schemas.types import PredictRequest, PredictResponse
 from app.services.heatmap_service import HeatmapService
 from app.services.model_service import ModelService
@@ -16,8 +16,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-heatmap_service = HeatmapService()
 model_service = ModelService()
+heatmap_service = HeatmapService(model_service)
 
 
 @app.get("/health")
@@ -26,6 +26,7 @@ def health() -> dict:
         "status": "ok",
         "model_file": str(MODEL_FILE),
         "heatmap_file": str(HEATMAP_FILE),
+        "heatmap_inference_config": str(HEATMAP_INFERENCE_CONFIG),
     }
 
 
