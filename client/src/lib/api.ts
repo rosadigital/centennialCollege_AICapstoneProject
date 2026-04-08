@@ -1,4 +1,7 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const configuredApiUrl = import.meta.env.VITE_API_URL;
+const apiBaseUrls = configuredApiUrl
+  ? [configuredApiUrl]
+  : ['http://localhost:8000', 'http://127.0.0.1:8001'];
 
 export type MetadataResponse = {
   vehicle_types: string[];
@@ -33,9 +36,26 @@ export type HeatmapFilters = {
   includeTimeDecay: boolean;
 };
 
+async function fetchFromApi(path: string): Promise<Response> {
+  let lastError: unknown;
+
+  for (const baseUrl of apiBaseUrls) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`);
+      if (!response.ok) {
+        throw new Error(`Request failed with ${response.status} from ${baseUrl}${path}`);
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${path}`);
+}
+
 export async function fetchMetadata(): Promise<MetadataResponse> {
-  const response = await fetch(`${API_BASE_URL}/metadata`);
-  if (!response.ok) throw new Error('Failed to fetch metadata');
+  const response = await fetchFromApi('/metadata');
   return response.json();
 }
 
@@ -48,7 +68,6 @@ export async function fetchHeatmap(filters: HeatmapFilters): Promise<HeatmapResp
     include_time_decay: String(filters.includeTimeDecay),
   });
 
-  const response = await fetch(`${API_BASE_URL}/heatmap?${query.toString()}`);
-  if (!response.ok) throw new Error('Failed to fetch heatmap data');
+  const response = await fetchFromApi(`/heatmap?${query.toString()}`);
   return response.json();
 }

@@ -64,7 +64,9 @@ function App() {
         setPointCount(0);
         setAvgDelay(0);
         setP90Delay(0);
-        setError('Unable to fetch heatmap data. Check if server is running.');
+        setError(
+          'Unable to fetch heatmap data. Confirm the FastAPI app is running and reachable. If port 8000 is used by another app, start Uvicorn on another port (e.g. 8001) and set VITE_API_URL in client/.env — see client/README.md.',
+        );
       } finally {
         setLoading(false);
       }

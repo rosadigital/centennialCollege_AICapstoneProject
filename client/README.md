@@ -5,7 +5,18 @@ React + TypeScript + Vite + Tailwind CSS + MapLibre GL. Single-page app: filters
 ## Prerequisites
 
 - **Node.js** 18+ (recommended; Vite 5 is pinned for broad compatibility)
-- The **API** running (see [`../server/README.md`](../server/README.md)) — default `http://localhost:8000`
+- The **API** running (see [`../server/README.md`](../server/README.md))
+
+## How the client finds the API
+
+| Situation | Behaviour |
+|-----------|------------|
+| **`VITE_API_URL` is set** (e.g. in `.env.local`) | All requests use that base URL only. |
+| **Not set** (default dev) | Tries **`http://localhost:8000`**, then **`http://127.0.0.1:8001`**. Use this when port **8000** is occupied by another app and you run this project’s FastAPI on **8001**. |
+
+Set `VITE_API_URL` explicitly in production or when you want a single predictable URL (no fallback).
+
+**CORS:** The browser origin must match what the API allows (`localhost` vs `127.0.0.1` are different origins). The server defaults include `http://localhost:5173`, `http://localhost:5174`, `http://127.0.0.1:5173`, and `http://127.0.0.1:5174` — see `server/app/config.py`.
 
 ## Install
 
@@ -22,21 +33,23 @@ npm install
 npm run dev
 ```
 
-Opens the Vite dev server (default **http://localhost:5173**).
+Vite prints the local URL (often **http://localhost:5173**; if 5173 is in use it may use **5174** or another free port).
 
-### Point the UI at a different API
+### Point the UI at a specific API
 
-By default the app calls `http://localhost:8000` (see `src/lib/api.ts`). To override:
-
-```bash
-VITE_API_URL=http://127.0.0.1:8000 npm run dev
-```
-
-Create a `.env` or `.env.local` in `client/` if you prefer:
+Create **`.env`** or **`.env.local`** in `client/` (restart `npm run dev` after changes):
 
 ```env
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=http://127.0.0.1:8001
 ```
+
+Or one-off:
+
+```bash
+VITE_API_URL=http://localhost:8000 npm run dev
+```
+
+If you see **Unable to fetch heatmap data**, something on **8000** may not be this project’s FastAPI (HTML error pages instead of JSON), or CORS does not include your exact dev origin. Fix by running Uvicorn on a free port, setting `VITE_API_URL`, and ensuring `CORS_ORIGINS` on the server matches how you open the app (`localhost` vs `127.0.0.1`).
 
 ## Build for production
 

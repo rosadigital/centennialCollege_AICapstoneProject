@@ -35,6 +35,12 @@ source .venv/bin/activate
 PYTHONPATH=server uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+**Port 8000 already in use** (e.g. another Python app or Django): run Uvicorn on a free port and point the Vite client at it with `VITE_API_URL` (see `client/README.md`):
+
+```bash
+PYTHONPATH=server uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+```
+
 If `model.pkl` exists under `aiProject/outputs/model_artifacts/` but not under `server/model_artifacts/`, the server **auto-detects** that folder — you do not need `export ARTIFACTS_DIR=...` unless you want to force a path.
 
 **Force a specific artifacts folder** (optional):
@@ -54,8 +60,23 @@ source ../.venv/bin/activate
 PYTHONPATH=. uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- API docs: **http://localhost:8000/docs**  
+- API docs: **http://localhost:8000/docs** (same path on whatever host/port you bind, e.g. **http://127.0.0.1:8001/docs**)
 - Health: **GET** `http://localhost:8000/health`
+
+## Runtime diagram (dev)
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser"]
+        V["Vite dev server\n5173 / 5174"]
+    end
+    subgraph API["FastAPI"]
+        M["CORS middleware"]
+        R["/metadata · /heatmap · /predict · /health"]
+        M --> R
+    end
+    V -->|"fetch JSON"| M
+```
 
 ## Environment variables
 
@@ -67,13 +88,13 @@ Optional overrides (see `server/.env.example`):
 | `MODEL_FILE` | Path to `model.pkl` |
 | `HEATMAP_FILE` | Path to legacy `heatmap_predictions_test_agg.csv` (optional migration source) |
 | `HEATMAP_INFERENCE_CONFIG` | Path to `heatmap_inference_config.json` (preferred) |
-| `CORS_ORIGINS` | Comma-separated allowed browser origins (defaults include `http://localhost:5173` and `http://localhost:5174` — Vite may use either port) |
+| `CORS_ORIGINS` | Comma-separated browser origins. Defaults include **localhost and 127.0.0.1** on **5173** and **5174** (Vite may use either port; `localhost` vs `127.0.0.1` are different origins). |
 
 Example when running only from `server/` with relative paths:
 
 ```bash
 export ARTIFACTS_DIR=./model_artifacts
-export CORS_ORIGINS=http://localhost:5173
+export CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 PYTHONPATH=. uvicorn app.main:app --reload --port 8000
 ```
 
@@ -88,4 +109,4 @@ Or copy `server/.env.example` to `server/.env` and load it with your process man
 
 ## Client
 
-Start the React app from [`../client/README.md`](../client/README.md) (default **http://localhost:5173**).
+Start the React app from [`../client/README.md`](../client/README.md). Vite typically serves **http://localhost:5173**; if that port is busy it may use **5174** or another port. Open the app with the same hostname style you configured in `CORS_ORIGINS` (`localhost` vs `127.0.0.1`).

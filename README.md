@@ -16,7 +16,7 @@ Users select **vehicle type**, **month**, **day of week**, and **hour**; the app
 
 ## Architecture
 
-High-level view of how the **browser**, **MCP client adapter**, **FastAPI adapter/runtime**, and **artifacts/resources** fit together in a hybrid REST+MCP representation.
+Logical view of the stack: the SPA calls **REST** endpoints (`fetch` in `client/src/lib/api.ts`). The labels below mirror **MCP-style tools** for documentation only; the wire protocol is plain HTTP JSON.
 
 ```mermaid
 flowchart TB
@@ -27,15 +27,15 @@ flowchart TB
     subgraph Client["Client — Vite + React + MapLibre"]
         CP[ControlPanel — filters]
         HM[HeatmapMap — basemap + heat layer]
-        APIc[mcpClient adapter]
+        APIc["fetch — api.ts"]
         CP --> APIc
         HM --> APIc
     end
 
-    subgraph Server["Server — FastAPI MCP adapter/runtime"]
-        R1["Tool: get_metadata"]
-        R2["Tool: get_heatmap"]
-        R3["Tool: predict"]
+    subgraph Server["Server — FastAPI"]
+        R1["GET /metadata"]
+        R2["GET /heatmap"]
+        R3["POST /predict"]
         HS[HeatmapService — bin grid + orchestration]
         MS[ModelService — batch inference from model.pkl]
         R1 --> HS
@@ -44,27 +44,43 @@ flowchart TB
         R3 --> MS
     end
 
-    subgraph Artifacts["server/model_artifacts"]
+    subgraph Artifacts["Artifacts (see server/model_artifacts or aiProject/outputs/model_artifacts)"]
         CFG["heatmap_inference_config.json — bins + filter domains"]
         PKL["model.pkl — preprocessor + regressor bundle"]
     end
 
     U --> CP
     U --> HM
-    APIc -->|"Tool call get_metadata {}"| R1
-    R1 -->|"Tool result {vehicle_types, months, days_of_week, hours}"| APIc
-    APIc -->|"Tool call get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}"| R2
-    R2 -->|"Tool result {points[], kpis}"| APIc
+    APIc -->|"GET /metadata"| R1
+    R1 -->|"JSON domains"| APIc
+    APIc -->|"GET /heatmap?…"| R2
+    R2 -->|"JSON {points[], kpis}"| APIc
     HS -.->|"startup: load grid + domains"| CFG
     MS -->|"load once + infer"| PKL
 ```
 
-### Architecture steps (MCP-style)
+**Dev runtime (ports and CORS):** Vite may serve on **5173** or **5174**; opening the app as `http://localhost:…` vs `http://127.0.0.1:…` is a **different browser origin** and must be listed in `CORS_ORIGINS`. If another app already uses **8000**, run Uvicorn on **8001** and set `VITE_API_URL` or rely on the client’s built-in fallback (see [`client/README.md`](client/README.md)).
 
-1. **Client calls metadata tool** — The frontend adapter sends `get_metadata` with an empty payload. The server returns valid domains for vehicle, month, weekday, and hour (loaded at startup from `heatmap_inference_config.json`, or derived once from the legacy aggregate CSV if that JSON is absent).
-2. **Client calls heatmap tool** — The frontend adapter sends `get_heatmap` with typed filters. The server runs **batch inference** over all geographic bins for that time context and returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
-3. **Bin grid resource** — `HeatmapService` holds the list of `(latitude_bin, longitude_bin)` coordinates from `heatmap_inference_config.json` (training export). **No precomputed delay values** are read from CSV for the response; delays are always produced by the model.
-4. **Model artifact** — `ModelService` loads `model.pkl` (preprocessor + regressor) once at startup and reuses it for every heatmap and `predict` call.
+```mermaid
+flowchart LR
+    subgraph Origins["Vite dev origins (examples)"]
+        O1["http://localhost:5173"]
+        O2["http://localhost:5174"]
+        O3["http://127.0.0.1:5173"]
+        O4["http://127.0.0.1:5174"]
+    end
+    subgraph API["FastAPI"]
+        EP["/metadata · /heatmap · /predict · /health"]
+    end
+    Origins -->|"fetch + CORS allowlist"| API
+```
+
+### Architecture steps
+
+1. **`GET /metadata`** — Returns valid domains for vehicle, month, weekday, and hour (loaded at startup from `heatmap_inference_config.json`, or derived once from the legacy aggregate CSV if that JSON is absent).
+2. **`GET /heatmap`** — With query parameters for filters, the server runs **batch inference** over all geographic bins for that time context and returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
+3. **Bin grid** — `HeatmapService` holds the list of `(latitude_bin, longitude_bin)` coordinates from `heatmap_inference_config.json` (training export). **No precomputed delay values** are read from CSV for the response; delays are always produced by the model.
+4. **Model artifact** — `ModelService` loads `model.pkl` (preprocessor + regressor) once at startup and reuses it for every heatmap and `POST /predict` call.
 
 ## Sequence diagram (typical UI session)
 
@@ -74,46 +90,46 @@ How the SPA loads options and refreshes the map when filters change, with explic
 sequenceDiagram
     actor User
     participant App as React App
-    participant API as FastAPI MCP adapter
+    participant API as FastAPI
     participant CFG as heatmap_inference_config.json
     participant MFile as model.pkl
     participant HSvc as HeatmapService
     participant MSvc as ModelService
 
     User->>App: Open app
-    App->>API: TOOL CALL get_metadata {}
+    App->>API: GET /metadata
     API->>HSvc: metadata()
     Note over HSvc: Domains + bin grid loaded at startup from CFG (or legacy CSV for migration)
     HSvc-->>API: metadata domains
-    API-->>App: TOOL RESULT {vehicle_types, months, days_of_week, hours}
+    API-->>App: 200 JSON {vehicle_types, months, days_of_week, hours}
     App->>App: Initialize filter defaults
 
     User->>App: Adjust vehicle / month / day / hour
-    App->>API: TOOL CALL get_heatmap {vehicle_type, month, day_of_week, hour, include_time_decay}
+    App->>API: GET /heatmap?vehicle_type&month&day_of_week&hour&include_time_decay
     API->>HSvc: query(filters)
     HSvc->>MSvc: predict_batch(all bins × filters)
     MSvc->>MFile: in-memory model + preprocessor
     MFile-->>MSvc: vector predictions
     MSvc-->>HSvc: delay per bin
     HSvc-->>API: points + KPI aggregates
-    API-->>App: TOOL RESULT {points[], kpis}
+    API-->>App: 200 JSON {points[], kpis}
     App->>User: Update MapLibre heatmap + KPI cards
 
     opt Point-level prediction
-        App->>API: TOOL CALL predict {lat, lon, vehicle_type, month, day_of_week, hour}
+        App->>API: POST /predict {lat, lon, vehicle_type, ...}
         API->>MSvc: predict_single(...)
         MSvc->>MFile: same loaded bundle
         MSvc-->>API: predicted_delay_minutes
-        API-->>App: TOOL RESULT {predicted_delay_minutes, model_name}
+        API-->>App: 200 JSON {predicted_delay_minutes, model_name}
     end
 ```
 
-### Sequence steps (MCP-style)
+### Sequence steps
 
-1. **Metadata handshake** — The app calls `get_metadata {}` to bootstrap filter options. The runtime returns domains that were loaded with the bin grid at service startup (from `heatmap_inference_config.json`, or from the legacy aggregate CSV if the JSON is not present yet).
-2. **Heatmap query cycle** — The app calls `get_heatmap` with selected filters each time the user changes controls. `HeatmapService` invokes **batch prediction** over the full bin grid for that filter tuple via `ModelService`.
-3. **Model-backed map** — Predictions are computed from `model.pkl` for every `(lat_bin, lon_bin)` in the grid; weights and KPIs are derived from those scores (not from precomputed CSV columns).
-4. **Optional point prediction** — The app can call `predict` for a single coordinate and time context using the same loaded model bundle.
+1. **Metadata** — `GET /metadata` bootstraps filter options. Domains are loaded with the bin grid at service startup (from `heatmap_inference_config.json`, or from the legacy aggregate CSV if the JSON is not present yet).
+2. **Heatmap** — `GET /heatmap` with query params runs whenever filters change. `HeatmapService` invokes **batch prediction** over the full bin grid for that filter tuple via `ModelService`.
+3. **Model-backed map** — Predictions come from `model.pkl` for every `(lat_bin, lon_bin)` in the grid; weights and KPIs are derived from those scores (not from precomputed CSV columns).
+4. **Optional point prediction** — `POST /predict` scores a single coordinate and time context using the same loaded model bundle.
 
 ### Heatmap request latency (reference)
 
@@ -130,10 +146,10 @@ Measured locally with the project `.venv`, `ARTIFACTS_DIR` pointing at existing 
 
 3. **Start the web client** (terminal 2) — see [`client/README.md`](client/README.md) for details.
 
-Default URLs:
+Default URLs (typical):
 
-- API: `http://localhost:8000`
-- Client: `http://localhost:5173`
+- API: `http://localhost:8000` (if that port is already used by another app, use **8001** and point the client — see [`server/README.md`](server/README.md) / [`client/README.md`](client/README.md))
+- Client: `http://localhost:5173` — Vite may pick **5174** if 5173 is busy; use **`localhost` vs `127.0.0.1` consistently** with your API URL so CORS matches (`server/app/config.py` defaults include both hostnames for 5173/5174)
 
 ## Notebook pipeline (import → `model.pkl`)
 
