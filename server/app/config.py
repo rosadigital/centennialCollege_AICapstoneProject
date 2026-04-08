@@ -37,6 +37,9 @@ HEATMAP_INFERENCE_CONFIG = Path(
 
 CORS_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://localhost:5174",
+    ).split(",")
     if origin.strip()
 ]

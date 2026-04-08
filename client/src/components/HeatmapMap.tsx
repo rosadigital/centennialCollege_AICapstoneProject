@@ -35,21 +35,34 @@ export function HeatmapMap({ points }: HeatmapMapProps) {
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    const container = mapContainerRef.current;
+    let cancelled = false;
 
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      // Streets-focused basemap (no token required) for a more realistic city view.
-      style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
-      center: [-79.3832, 43.6532],
-      zoom: 10,
-    });
-    map.addControl(new maplibregl.NavigationControl(), 'top-right');
-    popupRef.current = new maplibregl.Popup({
-      closeButton: false,
-      closeOnClick: false,
-    });
+    const CARTO_VOYAGER_STYLE =
+      'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 
-    map.on('load', () => {
+    const initMap = async () => {
+      const res = await fetch(CARTO_VOYAGER_STYLE);
+      const style = (await res.json()) as Record<string, unknown>;
+      // MapLibre v5 + some remote GL styles omit `projection`, which breaks migrateProjection.
+      if (style.projection == null) {
+        style.projection = { type: 'mercator' };
+      }
+      if (cancelled) return;
+
+      const map = new maplibregl.Map({
+        container,
+        style: style as maplibregl.StyleSpecification,
+        center: [-79.3832, 43.6532],
+        zoom: 10,
+      });
+      map.addControl(new maplibregl.NavigationControl(), 'top-right');
+      popupRef.current = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+      });
+
+      map.on('load', () => {
       map.addSource('delay-points', {
         type: 'geojson',
         data: featureCollection,
@@ -185,10 +198,17 @@ export function HeatmapMap({ points }: HeatmapMapProps) {
       });
     });
 
-    mapRef.current = map;
+      mapRef.current = map;
+    };
+
+    void initMap();
+
     return () => {
-      map.remove();
-      mapRef.current = null;
+      cancelled = true;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
     };
   }, []);
 

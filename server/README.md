@@ -67,7 +67,7 @@ Optional overrides (see `server/.env.example`):
 | `MODEL_FILE` | Path to `model.pkl` |
 | `HEATMAP_FILE` | Path to legacy `heatmap_predictions_test_agg.csv` (optional migration source) |
 | `HEATMAP_INFERENCE_CONFIG` | Path to `heatmap_inference_config.json` (preferred) |
-| `CORS_ORIGINS` | Comma-separated allowed browser origins (default includes `http://localhost:5173`) |
+| `CORS_ORIGINS` | Comma-separated allowed browser origins (defaults include `http://localhost:5173` and `http://localhost:5174` — Vite may use either port) |
 
 Example when running only from `server/` with relative paths:
 
