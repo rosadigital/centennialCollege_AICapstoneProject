@@ -7,8 +7,8 @@ FastAPI service: model inference, heatmap data, and metadata for the web client.
 - **Python** 3.10+ recommended  
 - **Model artifacts** (from the EDA notebook / OOP pipeline). By default the API looks for `model.pkl` in **`server/model_artifacts/`** first; if it is not there but exists under **`aiProject/outputs/model_artifacts/`**, that folder is used automatically (no copy, no `ARTIFACTS_DIR`, unless you want to override).
   - `model.pkl`
-  - `heatmap_inference_config.json` (bin grid + filter domains for the heatmap API; generated on training — optional if legacy CSV exists)
-  - Optional: `heatmap_predictions_test_agg.csv` — used only if the JSON is missing, to **migrate** bin coordinates/metadata; heatmap **values** are always computed from `model.pkl` at request time.
+  - `heatmap_inference_config.json` — **required** to start the API: `metadata`, `bins`, and `context_bin_indices` (per-filter bin subsets; keys `vehicle_type|month|day_of_week|hour`). Produced by `python -m aiProject.ttc_pipeline training`.
+  - Optional: `heatmap_predictions_test_agg.csv` — written during training for offline analysis; **not** used by the heatmap API.
 
 Paths are resolved from the **repository root** (see `app/config.py`). Override with **`ARTIFACTS_DIR`** if your files live elsewhere.
 
@@ -86,8 +86,8 @@ Optional overrides (see `server/.env.example`):
 |----------|---------|
 | `ARTIFACTS_DIR` | Folder containing artifacts (default: `<repo>/server/model_artifacts`) |
 | `MODEL_FILE` | Path to `model.pkl` |
-| `HEATMAP_FILE` | Path to legacy `heatmap_predictions_test_agg.csv` (optional migration source) |
-| `HEATMAP_INFERENCE_CONFIG` | Path to `heatmap_inference_config.json` (preferred) |
+| `HEATMAP_FILE` | Path to `heatmap_predictions_test_agg.csv` (optional; not read by the heatmap API) |
+| `HEATMAP_INFERENCE_CONFIG` | Path to `heatmap_inference_config.json` (**required** for `/heatmap` and `/metadata`) |
 | `CORS_ORIGINS` | Comma-separated browser origins. Defaults include **localhost and 127.0.0.1** on **5173** and **5174** (Vite may use either port; `localhost` vs `127.0.0.1` are different origins). |
 
 Example when running only from `server/` with relative paths:
@@ -104,6 +104,8 @@ Or copy `server/.env.example` to `server/.env` and load it with your process man
 
 - **`ModuleNotFoundError: No module named 'app'`** — You ran `uvicorn` with the wrong `PYTHONPATH`. From the **repo root**, use `PYTHONPATH=server` (not `PYTHONPATH=.`). Or `cd server` and use `PYTHONPATH=.`.
 - **`FileNotFoundError: Model file not found: .../model.pkl`** — Ensure `model.pkl` exists in **`server/model_artifacts/`** or **`aiProject/outputs/model_artifacts/`** (the latter is auto-used if the former has no model). Otherwise set **`ARTIFACTS_DIR`** to the folder that contains `model.pkl`. Do not paste the literal path `/path/to/centennialCollege_AICapstoneProject` from docs — use your real project directory.
+- **`FileNotFoundError: Heatmap inference config not found: .../heatmap_inference_config.json`** — Run training export: `python -m aiProject.ttc_pipeline training` (from repo root, venv active) so `heatmap_inference_config.json` is written next to `model.pkl`, or set **`HEATMAP_INFERENCE_CONFIG`** to an existing file path.
+- **`ValueError: heatmap_inference_config.json is outdated`** — Your JSON predates `context_bin_indices`. Re-run `python -m aiProject.ttc_pipeline training` to regenerate the config.
 - **`ModuleNotFoundError: No module named 'lightgbm'`** — Install dependencies with `pip install -r server/requirements.txt` inside the **same** virtualenv you use to run `uvicorn`.
 - **Wrong working directory** — If artifact paths fail, run from repo root or set `ARTIFACTS_DIR` / `MODEL_FILE` / `HEATMAP_FILE` / `HEATMAP_INFERENCE_CONFIG` explicitly.
 

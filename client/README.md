@@ -18,6 +18,8 @@ Set `VITE_API_URL` explicitly in production or when you want a single predictabl
 
 **CORS:** The browser origin must match what the API allows (`localhost` vs `127.0.0.1` are different origins). The server defaults include `http://localhost:5173`, `http://localhost:5174`, `http://127.0.0.1:5173`, and `http://127.0.0.1:5174` — see `server/app/config.py`.
 
+**Heatmap vs filters:** The map shows only bins that exist in the training export for the **exact** combination vehicle + month + weekday + hour (`context_bin_indices` in `heatmap_inference_config.json`). If a combination has no bins, the API returns an empty `points` array (KPIs zero).
+
 ## Install
 
 From the **repository root**:

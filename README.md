@@ -12,7 +12,7 @@ This repository contains a complete TTC delay prediction workflow:
 - **API:** FastAPI backend in [`server/`](server/)
 - **UI:** React + Tailwind + MapLibre heatmap client in [`client/`](client/)
 
-Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs computed **on each request** by the backend model (`model.pkl`) over a fixed geographic bin grid from `heatmap_inference_config.json` (training export). Point-level scoring remains available via `POST /predict`.
+Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs computed **on each request** by the backend model (`model.pkl`). The heatmap uses only bins listed for that exact context in `heatmap_inference_config.json` (training export: `context_bin_indices` keyed as `vehicle_type|month|day_of_week|hour`). Point-level scoring remains available via `POST /predict`.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ flowchart TB
     end
 
     subgraph Artifacts["Artifacts (see server/model_artifacts or aiProject/outputs/model_artifacts)"]
-        CFG["heatmap_inference_config.json — bins + filter domains"]
+        CFG["heatmap_inference_config.json — bins + domains + context_bin_indices"]
         PKL["model.pkl — preprocessor + regressor bundle"]
     end
 
@@ -77,9 +77,9 @@ flowchart LR
 
 ### Architecture steps
 
-1. **`GET /metadata`** — Returns valid domains for vehicle, month, weekday, and hour (loaded at startup from `heatmap_inference_config.json`, or derived once from the legacy aggregate CSV if that JSON is absent).
-2. **`GET /heatmap`** — With query parameters for filters, the server runs **batch inference** over all geographic bins for that time context and returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
-3. **Bin grid** — `HeatmapService` holds the list of `(latitude_bin, longitude_bin)` coordinates from `heatmap_inference_config.json` (training export). **No precomputed delay values** are read from CSV for the response; delays are always produced by the model.
+1. **`GET /metadata`** — Returns valid domains for vehicle, month, weekday, and hour (loaded at startup from `heatmap_inference_config.json`).
+2. **`GET /heatmap`** — With query parameters for filters, the server runs **batch inference** only on bins indexed for that exact filter tuple (`context_bin_indices`) and returns map points plus KPI aggregates (`avg_delay`, `p90`, `point_count`).
+3. **Bin index** — `HeatmapService` loads the full coordinate list from `heatmap_inference_config.json`, but each request selects the subset for `vehicle_type|month|day_of_week|hour`. **No CSV legado** is used for heatmap selection or inference.
 4. **Model artifact** — `ModelService` loads `model.pkl` (preprocessor + regressor) once at startup and reuses it for every heatmap and `POST /predict` call.
 
 ## Sequence diagram (typical UI session)
@@ -99,7 +99,7 @@ sequenceDiagram
     User->>App: Open app
     App->>API: GET /metadata
     API->>HSvc: metadata()
-    Note over HSvc: Domains + bin grid loaded at startup from CFG (or legacy CSV for migration)
+    Note over HSvc: Domains + bins + context index loaded at startup from CFG
     HSvc-->>API: metadata domains
     API-->>App: 200 JSON {vehicle_types, months, days_of_week, hours}
     App->>App: Initialize filter defaults
@@ -107,7 +107,7 @@ sequenceDiagram
     User->>App: Adjust vehicle / month / day / hour
     App->>API: GET /heatmap?vehicle_type&month&day_of_week&hour&include_time_decay
     API->>HSvc: query(filters)
-    HSvc->>MSvc: predict_batch(all bins × filters)
+    HSvc->>MSvc: predict_batch(context bins × filters)
     MSvc->>MFile: in-memory model + preprocessor
     MFile-->>MSvc: vector predictions
     MSvc-->>HSvc: delay per bin
@@ -126,21 +126,21 @@ sequenceDiagram
 
 ### Sequence steps
 
-1. **Metadata** — `GET /metadata` bootstraps filter options. Domains are loaded with the bin grid at service startup (from `heatmap_inference_config.json`, or from the legacy aggregate CSV if the JSON is not present yet).
-2. **Heatmap** — `GET /heatmap` with query params runs whenever filters change. `HeatmapService` invokes **batch prediction** over the full bin grid for that filter tuple via `ModelService`.
-3. **Model-backed map** — Predictions come from `model.pkl` for every `(lat_bin, lon_bin)` in the grid; weights and KPIs are derived from those scores (not from precomputed CSV columns).
+1. **Metadata** — `GET /metadata` bootstraps filter options from `heatmap_inference_config.json`.
+2. **Heatmap** — `GET /heatmap` runs whenever filters change. `HeatmapService` resolves the bin subset for the exact tuple and invokes **batch prediction** via `ModelService`.
+3. **Model-backed map** — Predictions come from `model.pkl` for each selected bin; weights and KPIs are derived from those scores.
 4. **Optional point prediction** — `POST /predict` scores a single coordinate and time context using the same loaded model bundle.
 
 ### Heatmap request latency (reference)
 
-Measured locally with the project `.venv`, `ARTIFACTS_DIR` pointing at existing artifacts, and **~2066** bin points: one heatmap query took **~22–27 ms** after model load; first-time `model.pkl` load was **~1.5 s** (I/O + unpickle). Your numbers will vary with CPU, disk, and grid size.
+Measured locally with the project `.venv` and a full-grid export: one heatmap query was on the order of **tens of ms** after model load; first-time `model.pkl` load was **~1–2 s** (I/O + unpickle). With `context_bin_indices`, **fewer bins per request** usually means lower latency. Your numbers will vary with CPU, disk, and subset size.
 
 ## Quick start (run the full stack)
 
 1. **Generate model artifacts** (if not already present): run [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TTC_Delay_Prediction.ipynb) **or** the OOP pipeline (see [OOP Python pipeline](#oop-python-pipeline-uml)) so the following exist under `server/model_artifacts/` (or set `ARTIFACTS_DIR`):
    - `model.pkl`
-   - `heatmap_inference_config.json` (bin grid + filter domains; written by the training export step)
-   - Optional legacy file `heatmap_predictions_test_agg.csv` — used only to **derive** bins/metadata if `heatmap_inference_config.json` is missing; heatmap **values** always come from the model at request time.
+   - `heatmap_inference_config.json` — **required** for the API: includes `metadata`, `bins`, and `context_bin_indices` (keys `vehicle_type|month|day_of_week|hour`). Regenerate with `python -m aiProject.ttc_pipeline training` if the server reports a missing or outdated config.
+   - Optional: `heatmap_predictions_test_agg.csv` — offline aggregate from training; **not** used by the heatmap API for bin selection or inference.
 
 2. **Start the API** (terminal 1) — see [`server/README.md`](server/README.md) for details.
 
@@ -177,7 +177,7 @@ Steps follow [`aiProject/01_EDA_TTC_Delay_Prediction.ipynb`](aiProject/01_EDA_TT
 15. **Train LightGBM** — Fit the gradient-boosting regressor inside the preprocessing pipeline.
 16. **Train XGBoost** — Fit an alternative booster for comparison on the same feature matrix.
 17. **Model selection** — Compare LightGBM vs. XGBoost on validation and test metrics and record the winner.
-18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`server/model_artifacts/model.pkl`**, write **`heatmap_inference_config.json`** (unique bins + filter domains), and optionally keep **`heatmap_predictions_test_agg.csv`** as an offline aggregate (the live API heatmap uses the model, not CSV values).
+18. **Production bundle & heatmap export** — Retrain the best model on train+validation, serialize the **preprocessor + regressor** bundle with `joblib.dump` to **`server/model_artifacts/model.pkl`**, write **`heatmap_inference_config.json`** (bins, domains, and `context_bin_indices` per filter tuple), and optionally keep **`heatmap_predictions_test_agg.csv`** as an offline aggregate only.
 
 ## OOP Python pipeline (UML)
 
