@@ -94,6 +94,10 @@ def _write_minimal_artifacts(artifacts_dir: Path) -> None:
             {"latitude_bin": 43.65, "longitude_bin": -79.38},
             {"latitude_bin": 43.66, "longitude_bin": -79.39},
         ],
+        "context_bin_indices": {
+            "BUS|6|3|14": [0],
+            "STREETCAR|4|5|9": [1],
+        },
     }
     (artifacts_dir / "heatmap_inference_config.json").write_text(
         json.dumps(cfg), encoding="utf-8"
