@@ -12,7 +12,7 @@ This repository contains a complete TTC delay prediction workflow:
 - **API:** FastAPI backend in [`server/`](server/)
 - **UI:** React + Tailwind + MapLibre heatmap client in [`client/`](client/)
 
-Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs computed **on each request** by the backend model (`model.pkl`). The heatmap uses only bins listed for that exact context in `heatmap_inference_config.json` (training export: `context_bin_indices` keyed as `vehicle_type|month|day_of_week|hour`). Point-level scoring remains available via `POST /predict`.
+Users select **vehicle type**, **month**, **day of week**, and **hour**; the app shows predicted delay intensity on a map and summary KPIs computed **on each request** by the backend model (`model.pkl`). The heatmap uses only bins listed for that exact context in `heatmap_inference_config.json` (training export: `context_bin_indices` keyed as `vehicle_type|month|day_of_week|hour`, built from **train+validation+test** rows so coverage matches historical data, not the test split alone). Point-level scoring remains available via `POST /predict`.
 
 ## Architecture
 

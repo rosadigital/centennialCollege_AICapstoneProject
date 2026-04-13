@@ -336,20 +336,57 @@ class ModelTrainingPipeline:
             )
         )
         heatmap_agg.to_csv(art / "heatmap_predictions_test_agg.csv", index=False)
-        gcfg = heatmap_df.dropna(subset=["Latitude", "Longitude"])
+        # Bin grid + per-context indices must reflect historical coverage (train+val+test),
+        # not test-only rows — otherwise sparse tuples (e.g. one STREETCAR event at 11:00)
+        # would export a single bin and the live heatmap would show one point.
+        full_events = pd.concat([self.train_df, self.val_df, self.test_df], axis=0, ignore_index=True)
+        heatmap_index_df = full_events[
+            ["EventDateTime", "Latitude", "Longitude", "Vehicle_Type", "Month"]
+        ].copy()
+        heatmap_index_df["Hour"] = heatmap_index_df["EventDateTime"].dt.hour
+        heatmap_index_df["DayOfWeek"] = heatmap_index_df["EventDateTime"].dt.dayofweek
+        heatmap_index_df["Latitude_Bin"] = heatmap_index_df["Latitude"].round(3)
+        heatmap_index_df["Longitude_Bin"] = heatmap_index_df["Longitude"].round(3)
+        gcfg = heatmap_index_df.dropna(subset=["Latitude", "Longitude"])
         meta_out = {
             "vehicle_types": sorted(gcfg["Vehicle_Type"].dropna().unique().tolist()),
             "months": sorted(gcfg["Month"].dropna().astype(int).unique().tolist()),
             "days_of_week": sorted(gcfg["DayOfWeek"].dropna().astype(int).unique().tolist()),
             "hours": sorted(gcfg["Hour"].dropna().astype(int).unique().tolist()),
         }
-        bins_unique = gcfg[["Latitude_Bin", "Longitude_Bin"]].drop_duplicates()
+        bins_unique = gcfg[["Latitude_Bin", "Longitude_Bin"]].drop_duplicates().reset_index(drop=True)
         bins_out = [
             {"latitude_bin": float(r["Latitude_Bin"]), "longitude_bin": float(r["Longitude_Bin"])}
             for _, r in bins_unique.iterrows()
         ]
+        bin_index_map = {
+            (float(r["Latitude_Bin"]), float(r["Longitude_Bin"])): int(i)
+            for i, r in bins_unique.iterrows()
+        }
+        context_bin_indices: dict[str, list[int]] = {}
+        grouped = gcfg.groupby(["Vehicle_Type", "Month", "DayOfWeek", "Hour"])
+        for (vehicle, month_key, dow_key, hour_key), group_df in grouped:
+            key = f"{vehicle}|{int(month_key)}|{int(dow_key)}|{int(hour_key)}"
+            ctx_bins = group_df[["Latitude_Bin", "Longitude_Bin"]].drop_duplicates().itertuples(
+                index=False, name=None
+            )
+            context_bin_indices[key] = sorted(
+                {
+                    bin_index_map[(float(lat), float(lon))]
+                    for lat, lon in ctx_bins
+                    if (float(lat), float(lon)) in bin_index_map
+                }
+            )
         with open(art / "heatmap_inference_config.json", "w", encoding="utf-8") as f:
-            json.dump({"metadata": meta_out, "bins": bins_out}, f, indent=2)
+            json.dump(
+                {
+                    "metadata": meta_out,
+                    "bins": bins_out,
+                    "context_bin_indices": context_bin_indices,
+                },
+                f,
+                indent=2,
+            )
         print(f"Artifacts written to {art}")
         for p in sorted(art.glob("*")):
             print(f" - {p.name}")
